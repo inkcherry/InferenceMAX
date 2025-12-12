@@ -29,14 +29,16 @@ host_name=$(hostname)
 # Model-Specific Configuration Maps
 # =============================================================================
 
+prefill_cuda_graph_bs=($(seq 1 3))
 declare -A MODEL_PREFILL_CONFIGS=(
-    ["DeepSeek-V3"]="--moe-a2a-backend none --enable-dp-attention --decode-log-interval 1 --load-balance-method round_robin --moe-dense-tp-size 1 --enable-dp-lm-head --disable-radix-cache --watchdog-timeout 1000000 --mem-fraction-static 0.9 --chunked-prefill-size 131076 --max-running-requests 4096 --context-length 12288 --max-total-tokens 131024 --disable-cuda-graph --attention-backend aiter"
-    ["DeepSeek-R1"]="--moe-a2a-backend mori --enable-dp-attention --decode-log-interval 1 --load-balance-method round_robin --moe-dense-tp-size 1 --enable-dp-lm-head --disable-radix-cache --watchdog-timeout 1000000 --mem-fraction-static 0.7 --chunked-prefill-size 8192 --max-running-requests 4096 --context-length 12288 --max-total-tokens 131024 --disable-cuda-graph --attention-backend aiter"
+  
+    ["DeepSeek-R1"]="--moe-a2a-backend mori --enable-dp-attention --decode-log-interval 1 --trust-remote-code --moe-dense-tp-size 1 --enable-dp-lm-head --watchdog-timeout 1000000 --mem-fraction-static 0.8 --max-running-requests 8 --chunked-prefill-size 262144 --cuda-graph-bs ${prefill_cuda_graph_bs[*]} --disable-radix-cache --ep-dispatch-algorithm fake --speculative-algorithm EAGLE --speculative-num-steps 1 --speculative-eagle-topk 1 --speculative-num-draft-tokens 2 --disaggregation-mode prefill --load-balance-method round_robin --kv-cache-dtype fp8_e4m3 --attention-backend aiter"
 )
 
+decode_cuda_graph_bs=($(seq 1 64))
 declare -A MODEL_DECODE_CONFIGS=(
-    ["DeepSeek-V3"]="--moe-a2a-backend none --enable-dp-attention --decode-log-interval 1 --prefill-round-robin-balance --moe-dense-tp-size 1 --enable-dp-lm-head --watchdog-timeout 1000000 --mem-fraction-static 0.9 --max-running-requests 4096 --cuda-graph-bs 128 256 --attention-backend aiter"
-    ["DeepSeek-R1"]="--moe-a2a-backend mori --enable-dp-attention --decode-log-interval 1 --prefill-round-robin-balance --moe-dense-tp-size 1 --enable-dp-lm-head --watchdog-timeout 1000000 --mem-fraction-static 0.7 --max-running-requests 4096 --cuda-graph-bs 128 256 --attention-backend aiter"
+  
+    ["DeepSeek-R1"]="--moe-a2a-backend mori --enable-dp-attention --decode-log-interval 1 --moe-dense-tp-size 1 --enable-dp-lm-head --watchdog-timeout 1000000 --mem-fraction-static 0.6 --max-running-requests 8192 --chunked-prefill-size 262144 --cuda-graph-bs  ${decode_cuda_graph_bs[*]}  --ep-dispatch-algorithm fake --disaggregation-mode decode --prefill-round-robin-balance --load-balance-method round_robin --speculative-algorithm EAGLE --speculative-num-steps 1 --speculative-eagle-topk 1 --speculative-num-draft-tokens 2 --kv-cache-dtype fp8_e4m3 --attention-backend aiter"
 )
 
 # =============================================================================
@@ -96,6 +98,9 @@ DECODE_ARGS=""
 PREFILL_ARGS="http://${IP_ARRAY[0]}:8000"
 DECODE_ARGS="http://${IP_ARRAY[$xP]}:8000"
 
+
+
+
 PREFILL_PARALELL=$((xP * 8))
 DECODE_PARALELL=$((yD * 8))
 
@@ -125,26 +130,24 @@ if [ "$NODE_RANK" -eq 0 ]; then
     --mini-lb \
     --port 30000 \
     --prefill ${PREFILL_ARGS} \
-    --decode ${DECODE_ARGS} \
+    --decode http://10.235.192.86:8000 \
+    --decode http://10.235.192.84:8000 \
     2>&1 | tee /run_logs/${SLURM_JOB_ID}/proxy_NODE${NODE_RANK}.log >/dev/null &
     set +x
     
     proxy_pid=$!
     
     # start the head prefill server
-    PREFILL_CMD="MC_TE_METRIC=true python3 -m sglang.launch_server \
+    PREFILL_CMD="GLOO_SOCKET_IFNAME=enp81s0f1 NCCL_SOCKET_IFNAME=enp81s0f1 SGLANG_USE_AITER=1 SGLANG_MORI_FP8_DISP=True SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK=16384 MC_TE_METRIC=true  python3 -m sglang.launch_server \
         --model-path $MODEL_PATH/$MODEL_NAME \
         --disaggregation-mode prefill \
         --disaggregation-ib-device ${IBDEVICES} \
         --host 0.0.0.0 \
         --port 8000 \
         --trust-remote-code \
-        --node-rank 0 \
-        --nnodes $xP \
-        --dist-init-addr ${IP_ARRAY[0]}:20000 \
-        --tp-size $PREFILL_PARALELL \
-        --dp-size $PREFILL_PARALELL \
-        --ep-size $PREFILL_PARALELL"
+        --tp-size 8 \
+        --dp-size 8 \
+        --ep-size 8"
     
     if [[ -n "$PREFILL_MODEL_CONFIG" ]]; then
         PREFILL_CMD="$PREFILL_CMD $PREFILL_MODEL_CONFIG"
@@ -178,19 +181,16 @@ elif [ "$NODE_RANK" -gt 0 ] && [ "$NODE_RANK" -lt "$xP" ]; then
     echo "${host_name}:${host_ip} is Prefill Node (Model: ${MODEL_NAME:-'default'})"
     echo "Using prefill config: $PREFILL_MODEL_CONFIG"
 
-    PREFILL_CMD="MC_TE_METRIC=true python3 -m sglang.launch_server \
+    PREFILL_CMD="GLOO_SOCKET_IFNAME=enp81s0f1 NCCL_SOCKET_IFNAME=enp81s0f1 SGLANG_USE_AITER=1 SGLANG_MORI_FP8_DISP=True SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK=16384 MC_TE_METRIC=true  python3 -m sglang.launch_server \
         --model-path $MODEL_PATH/${MODEL_NAME} \
         --disaggregation-mode prefill \
         --disaggregation-ib-device ${IBDEVICES} \
         --host 0.0.0.0 \
         --port 8000 \
         --trust-remote-code \
-        --nnodes $xP \
-        --node-rank $NODE_RANK \
-        --dist-init-addr ${IP_ARRAY[0]}:20000 \
-        --tp-size $PREFILL_PARALELL \
-        --dp-size $PREFILL_PARALELL \
-        --ep-size $PREFILL_PARALELL"
+        --tp-size 8 \
+        --dp-size 8 \
+        --ep-size 8"
     
     if [[ -n "$PREFILL_MODEL_CONFIG" ]]; then
         PREFILL_CMD="$PREFILL_CMD $PREFILL_MODEL_CONFIG"
@@ -223,19 +223,16 @@ else
     echo "Using decode config: $DECODE_MODEL_CONFIG"
     echo "Decode node rank: $RANK"
     
-    DECODE_CMD="MC_TE_METRIC=true python3 -m sglang.launch_server \
+    DECODE_CMD="GLOO_SOCKET_IFNAME=enp81s0f1 NCCL_SOCKET_IFNAME=enp81s0f1 SGLANG_USE_AITER=1 SGLANG_MORI_FP8_DISP=True SGLANG_MORI_NUM_MAX_DISPATCH_TOKENS_PER_RANK=16384 MC_TE_METRIC=true  python3 -m sglang.launch_server \
         --model-path ${MODEL_PATH}/${MODEL_NAME} \
         --disaggregation-mode decode \
         --disaggregation-ib-device ${IBDEVICES} \
         --host 0.0.0.0 \
         --port 8000 \
         --trust-remote-code \
-        --nnodes $yD \
-        --dist-init-addr ${IP_ARRAY[$xP]}:20000 \
-        --node-rank $RANK \
-        --tp-size $DECODE_PARALELL \
-        --dp-size $DECODE_PARALELL \
-        --ep-size $DECODE_PARALELL"
+        --tp-size 8 \
+        --dp-size 8 \
+        --ep-size 8"
 
     if [[ -n "$DECODE_MODEL_CONFIG" ]]; then
         DECODE_CMD="$DECODE_CMD $DECODE_MODEL_CONFIG "

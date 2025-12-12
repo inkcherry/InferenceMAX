@@ -1,0 +1,1 @@
+salloc -N 3 --ntasks-per-node=8 --nodelist=smci355-ccs-aus-n09-[33,29],smci355-ccs-aus-n08-29 --gres=gpu:8  -t 12:00:00

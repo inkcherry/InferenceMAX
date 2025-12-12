@@ -43,7 +43,7 @@ else
     exit 1
 fi
 
-export DOCKER_IMAGE_NAME="${DOCKER_IMAGE_NAME:-lmsysorg/sglang:v0.5.2rc1-rocm700-mi30x}"
+export DOCKER_IMAGE_NAME="${DOCKER_IMAGE_NAME:-rocm/pytorch-private:sglang-0.5.6.post1-rocm711-mi35x-mori-1212-3}"
 if test -z "${DOCKER_IMAGE_NAME}"; then
   echo "Error: DOCKER_IMAGE_NAME is not set or empty."
   exit 1
@@ -149,6 +149,7 @@ else
     echo "✗ FATAL ERROR: Model '$MODEL_NAME' not found on ALL allocated nodes in either:"
     echo "  - /mnt/m2m_nobackup/models_blog/$MODEL_NAME"
     echo "  - /shared-inference/models_blog/$MODEL_NAME"
+    echo "  - $MODEL_DIR/$MODEL_NAME"
     echo ""
     echo "Model must be accessible from all nodes for distributed execution."
     echo "Please ensure the model is available on all allocated nodes."
@@ -282,7 +283,7 @@ export MODEL_NAME=$MODEL_NAME
 export USER_NAME=$USER_NAME
 export IPADDRS="$(echo "${IPS[*]}" | sed 's/ /,/g')"
 
-export DOCKER_CONT_NAME="container_${MODEL_NAME}_${SLURM_JOB_ID}"
+export DOCKER_CONT_NAME="container_mingzhi_sbatch_${MODEL_NAME}_${SLURM_JOB_ID}"
 export RUN_FILE_FULL="$MOONCAKE_COOKBOOK_PATH/${RUN_FILE}"
 
 # Use only the selected nodes for srun execution
@@ -301,11 +302,12 @@ sudo docker run --rm \
     --cap-add SYS_PTRACE \
     --security-opt seccomp=unconfined \
     --privileged \
-    -v ${MODEL_DIR}:/shared-inference \
+    -v /apps/data/models:/shared-inference \
     -v $HOME/.ssh:/root/.ssh \
-    --shm-size 64G \
+    --shm-size 128G \
     -v ${LOG_PATH}:/run_logs \
     -v $MOONCAKE_REPO_DIR:$MOONCAKE_COOKBOOK_PATH \
+    -v /apps:/apps \
     -e SLURM_JOB_ID=$SLURM_JOB_ID \
     -e SLURM_JOB_NODELIST=$SLURM_JOB_NODELIST \
     -e NNODES=$NNODES \

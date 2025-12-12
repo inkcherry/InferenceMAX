@@ -37,7 +37,7 @@ def wait_for_all_ports():
         all_open = all(is_port_open(ip, port) for ip, port in zip(NODE_IPS, NODE_PORTS))
         if all_open:
             break
-        print("Waiting for nodes. . .", flush=True)
+        print(f"Waiting for nodes.{NODE_PORTS},{NODE_IPS} . .", flush=True)
         time.sleep(5)
 
 def open_port():
